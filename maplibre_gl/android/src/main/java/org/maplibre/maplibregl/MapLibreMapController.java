@@ -2365,6 +2365,12 @@ final class MapLibreMapController
   @Override
   public void setLocationEngineProperties(@NotNull LocationEngineRequest locationEngineRequest) {
     myLocationEngineFactory.initLocationComponent(context, locationComponent, locationEngineRequest);
+
+    // Engine instance may have been replaced — rebind Flutter onUserLocationUpdated listener.
+    if (locationComponent != null && locationComponent.isLocationComponentActivated()) {
+      stopListeningForLocationUpdates();
+      startListeningForLocationUpdates();
+    }
   }
 
   @Override
