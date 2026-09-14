@@ -28,10 +28,12 @@ class LocationEngineFactory {
         if (locationEngineRequest != null) {
             this.locationEngineRequest = locationEngineRequest
         }
-        if (locationComponent != null) {
+        // Only swap when activated — setLocationEngine can throw otherwise.
+        // enableLocationComponent() still picks up the stored request via getLocationEngine().
+        if (locationComponent != null && locationComponent.isLocationComponentActivated) {
             locationComponent.locationEngine = getLocationEngine(context)
-            locationEngineRequest?.let { locationEngineRequest ->
-                locationComponent.locationEngineRequest = locationEngineRequest
+            this.locationEngineRequest?.let { request ->
+                locationComponent.locationEngineRequest = request
             }
         }
     }

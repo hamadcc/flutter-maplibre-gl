@@ -51,6 +51,7 @@ import org.maplibre.android.location.LocationComponent;
 import org.maplibre.android.location.LocationComponentActivationOptions;
 import org.maplibre.android.location.LocationComponentOptions;
 import org.maplibre.android.location.OnCameraTrackingChangedListener;
+import org.maplibre.android.location.engine.LocationEngine;
 import org.maplibre.android.location.engine.LocationEngineCallback;
 import org.maplibre.android.location.engine.LocationEngineRequest;
 import org.maplibre.android.location.engine.LocationEngineResult;
@@ -148,6 +149,8 @@ final class MapLibreMapController
   private MethodChannel.Result mapReadyResult;
   private LocationComponent locationComponent = null;
   private LocationEngineCallback<LocationEngineResult> locationEngineCallback = null;
+  /** Engine that currently owns {@link #locationEngineCallback}; used so teardown survives engine swaps. */
+  private LocationEngine locationEngineListening = null;
   private Style style;
   private Feature draggedFeature;
   private AndroidGesturesManager androidGesturesManager;
@@ -2364,11 +2367,16 @@ final class MapLibreMapController
 
   @Override
   public void setLocationEngineProperties(@NotNull LocationEngineRequest locationEngineRequest) {
+    // Detach Flutter bridge from the engine that owns it BEFORE swapping, otherwise
+    // removeLocationUpdates runs on the new engine and the old registration leaks.
+    stopListeningForLocationUpdates();
+
     myLocationEngineFactory.initLocationComponent(context, locationComponent, locationEngineRequest);
 
-    // Engine instance may have been replaced — rebind Flutter onUserLocationUpdated listener.
-    if (locationComponent != null && locationComponent.isLocationComponentActivated()) {
-      stopListeningForLocationUpdates();
+    // Rebind only when location is enabled; avoid starting updates while puck is off.
+    if (myLocationEnabled
+        && locationComponent != null
+        && locationComponent.isLocationComponentActivated()) {
       startListeningForLocationUpdates();
     }
   }
@@ -2605,21 +2613,34 @@ final class MapLibreMapController
             @Override
             public void onFailure(@NonNull Exception exception) {}
           };
-      locationComponent
-          .getLocationEngine()
-          .requestLocationUpdates(
-              locationComponent.getLocationEngineRequest(), locationEngineCallback, null);
+      LocationEngine engine = locationComponent.getLocationEngine();
+      engine.requestLocationUpdates(
+          locationComponent.getLocationEngineRequest(), locationEngineCallback, null);
+      // Remember the engine that received the registration (not later getLocationEngine()).
+      locationEngineListening = engine;
     }
   }
 
   private void stopListeningForLocationUpdates() {
-    if (locationEngineCallback != null
-        && locationComponent != null
-        && locationComponent.isLocationComponentActivated()
-        && locationComponent.getLocationEngine() != null) {
-      locationComponent.getLocationEngine().removeLocationUpdates(locationEngineCallback);
-      locationEngineCallback = null;
+    if (locationEngineCallback == null) {
+      return;
     }
+
+    // Prefer the engine we registered on; fall back to the component's current engine.
+    LocationEngine engine = locationEngineListening;
+    if (engine == null && locationComponent != null) {
+      engine = locationComponent.getLocationEngine();
+    }
+
+    if (engine != null) {
+      try {
+        engine.removeLocationUpdates(locationEngineCallback);
+      } catch (Exception e) {
+        Log.w(TAG, "Failed to remove location updates during teardown", e);
+      }
+    }
+    locationEngineCallback = null;
+    locationEngineListening = null;
   }
 
   private void updateMyLocationTrackingMode() {
